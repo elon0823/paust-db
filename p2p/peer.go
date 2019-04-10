@@ -21,12 +21,15 @@ import (
 	"sync"
 	"os"
 	"strings"
-	"github.com/davecgh/go-spew/spew"
 
 )
 
 var mutex = &sync.Mutex{}
 
+type StreamBuffer struct {
+	Stream net.Stream
+	RW bufio.ReadWriter
+}
 type P2PManager struct {
 	Chain *BC.Blockchain
 	Address string
@@ -34,6 +37,7 @@ type P2PManager struct {
 	BasicHost host.Host
 	Secio bool
 	Randseed int64
+	StreamBuffers []StreamBuffer
 }
 
 func NewP2PManager(bchain *BC.Blockchain, address string, listenPort string, secio bool, randseed int64) (*P2PManager, error) {
@@ -55,7 +59,7 @@ func (p2pManager *P2PManager) Run(target string) {
 		// Set a stream handler on host A. /p2p/1.0.0 is
 		// a user-defined protocol name.
 		p2pManager.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pManager.handleStream)
-
+		go p2pManager.writeData()
 		select {} // hang forever
 		/**** This is where the listener code ends ****/
 	} else {
@@ -96,12 +100,8 @@ func (p2pManager *P2PManager) Run(target string) {
 		if err != nil {
 			log.Fatalln(err)
 		}
-		// Create a buffered stream so that read and writes are non blocking.
-		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-
-		// Create a thread to read and write data.
-		go p2pManager.writeData(rw)
-		go p2pManager.readData(rw)
+		p2pManager.registerStream(s)
+		go p2pManager.writeData()
 
 		select {} // hang forever
 
@@ -158,20 +158,55 @@ func makeBasicHost(address string, listenPort string, secio bool, randseed int64
 	return basicHost, nil
 }
 
-func (p2pManager *P2PManager) handleStream(s net.Stream) {
+func (p2pManager *P2PManager) registerStream(s net.Stream) {
 
-	log.Println("Got a new stream!")
-
-	// Create a buffer stream for non blocking read and write.
+	
+	// Create a buffered stream so that read and writes are non blocking.
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
-	go p2pManager.readData(rw)
-	go p2pManager.writeData(rw)
+	p2pManager.StreamBuffers = append(p2pManager.StreamBuffers, StreamBuffer{Stream:s, RW:*rw})
+	
+	// Create a thread to read and write data.
+	go p2pManager.readData(rw, s.Conn().RemotePeer().String())
+	
+}
+
+func (p2pManager *P2PManager) handleStream(s net.Stream) {
+
+	// Create a buffer stream for non blocking read and write.
+
+	p2pManager.registerStream(s)
+	
+	log.Println("Got a new stream!", "current = ", len(p2pManager.StreamBuffers))
+	for _, element := range p2pManager.StreamBuffers {
+		log.Println(element.Stream.Conn().RemotePeer().String())
+	}
 
 	// stream 's' will stay open until you close it (or the other side closes it).
 }
+func (p2pManager *P2PManager) broadCastChain(fromPeer string) {
 
-func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter) {
+	bytes, err := proto.Marshal(p2pManager.Chain)
+	if err != nil {
+		log.Println(err)
+	}
+
+	log.Println("Broadcasting chain")
+
+	str := string(bytes)
+	str = strings.Replace(str, "\n", "|bbaa", -1)
+
+	for _, element := range p2pManager.StreamBuffers {
+		peerID := element.Stream.Conn().RemotePeer().String()
+		if peerID != fromPeer {
+			rw := element.RW
+			rw.WriteString(fmt.Sprintf("%s\n", str))
+			rw.Flush()
+		}
+	}
+	
+}
+func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, remotePeer string) {
 
 	for {
 		str, err := rw.ReadString('\n')
@@ -183,6 +218,7 @@ func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter) {
 			return
 		}
 		if( str != "\n") {
+			log.Println("from peer ", remotePeer)
 			str = strings.Replace(str, "\n", "", -1)
 			str = strings.Replace(str, "|bbaa", "\n", -1)
 			
@@ -194,11 +230,13 @@ func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter) {
 			mutex.Lock()
 			p2pManager.Chain.ReplaceChain(chain)
 			mutex.Unlock()
+
+			p2pManager.broadCastChain(remotePeer)
 		}
 	}
 }
 
-func (p2pManager *P2PManager) writeData(rw *bufio.ReadWriter) {
+func (p2pManager *P2PManager) writeData() {
 
 	stdReader := bufio.NewReader(os.Stdin)
 
@@ -220,26 +258,8 @@ func (p2pManager *P2PManager) writeData(rw *bufio.ReadWriter) {
 		if err != nil {
 			log.Println(err)
 		}
-		
 
-		bytes, err := proto.Marshal(p2pManager.Chain)
-		if err != nil {
-			log.Println(err)
-		}
+		p2pManager.broadCastChain("")
 
-		spew.Dump(p2pManager.Chain)
-
-		mutex.Lock()
-		// spew.Dump("marshaled = ", string(bytes))
-		// chain := &BC.Blockchain{}
-		// err = proto.Unmarshal(bytes, chain)
-		// spew.Dump("unmarshaled = ", chain)
-		if err != nil {
-		}
-		str := string(bytes)
-		str = strings.Replace(str, "\n", "|bbaa", -1)
-		rw.WriteString(fmt.Sprintf("%s\n", str))
-		rw.Flush()
-		mutex.Unlock()
 	}
 }

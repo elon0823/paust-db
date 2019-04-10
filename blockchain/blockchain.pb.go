@@ -76,27 +76,33 @@ func (blockchain *Blockchain) AddBlock(bpm int32) error {
 
 	if blockchain.isValidBlock(*block, prevBlock) {
 		blockchain.Chain = append(blockchain.Chain, block)
+
+		blockchain.PrintChain()
 		return nil
 	} else {
 		return errors.New("Not valid block")
 	}
 }
 
-func (blockChain *Blockchain) ReplaceChain(newChain *Blockchain) {
+func (blockchain *Blockchain) ReplaceChain(newChain *Blockchain) {
 	
 	
-	if newChain.Length() > blockChain.Length() {
-		blockChain.Chain = newChain.Chain
-		bytes, err := json.MarshalIndent(blockChain, "", "  ")
-		if err != nil {
-
-			log.Fatal(err)
-		}
-		// Green console color: 	\x1b[32m
-		// Reset console color: 	\x1b[0m
-		fmt.Printf("Replace Chain!")
-		fmt.Printf("\x1b[32m%s\x1b[0m> ", string(bytes))
+	if newChain.Length() > blockchain.Length() {
+		blockchain.Chain = newChain.Chain
+		blockchain.PrintChain()
 	}
+}
+
+func (blockchain *Blockchain) PrintChain() {
+	bytes, err := json.MarshalIndent(blockchain, "", "  ")
+	if err != nil {
+
+		log.Fatal(err)
+	}
+	// Green console color: 	\x1b[32m
+	// Reset console color: 	\x1b[0m
+	fmt.Printf("Chain is changed!")
+	fmt.Printf("\x1b[32m%s\x1b[0m> ", string(bytes))
 }
 
 func (blockchain *Blockchain) isValidBlock(newBlock, oldBlock Block) bool {
