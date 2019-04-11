@@ -1,0 +1,8 @@
+syntax = "proto3";
+package p2p;
+
+message P2PMessage {
+    string path = 1;
+    bytes data = 2;
+}
+

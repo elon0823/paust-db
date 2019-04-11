@@ -1,7 +1,6 @@
 package main
 import (
-	"time"
-	wbservice "github.com/elon0823/paust-db/service"
+	
 	BC "github.com/elon0823/paust-db/blockchain"
 	P2P "github.com/elon0823/paust-db/p2p"
 	"flag"
@@ -24,12 +23,12 @@ func main() {
 		p2pManager.Run(*target)
 	}
 
-	webserver, error := wbservice.NewWebServer(blockchain, "localhost","3000",10 * time.Second,1 << 20)
-	
-	if (error == nil) {
-		webserver.Run()
-	}
 
-	
+	// To-Do
+	// 1. Block synchronization with observer pattern -done
+	// 2. Update chain when first connected to network -done
+	// 3. Rocksdb implementation
+	// 4. Block structure with meta/real data
+	// 5. 
 
 }
