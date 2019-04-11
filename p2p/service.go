@@ -62,6 +62,7 @@ func (p2pManager *P2PManager) StartWebServer(port int) {
 }
 func (p2pManager *P2PManager) Run(target string) {
 
+	
 	if target == "" {
 		log.Println("listening for connections")
 		// Set a stream handler on host A. /p2p/1.0.0 is
@@ -115,7 +116,14 @@ func (p2pManager *P2PManager) Run(target string) {
 		go p2pManager.writeData()
 		p2pManager.requestChain()
 
-		p2pManager.StartWebServer(3000 + mrand.Intn(1000))
+		mrand.Seed(time.Now().UTC().UnixNano())
+
+		if strings.Contains(target, "127.0.0.1") {
+			p2pManager.StartWebServer(3000 + mrand.Intn(1000))
+		} else {
+			p2pManager.StartWebServer(3000)
+		}
+		
 		select {} // hang forever
 
 	}
