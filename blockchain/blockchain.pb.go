@@ -120,12 +120,21 @@ func (blockchain *Blockchain) isValidBlock(newBlock, oldBlock Block) bool {
 	}
 
 	return true
-
 }
 
-func NewBlockchain() (*Blockchain, error) {
+func (blockchain *Blockchain) saveBlock(block *Block) error {
+	return nil
+}
+
+func (blockchain *Blockchain) loadBlock(index int32) error {
+	return nil
+}
+
+
+func NewBlockchain(storePath string) (*Blockchain, error) {
 	genesisBlock := Genesis()
 	newChain := []*Block{genesisBlock}
+	InitBlockStore(storePath)
 
 	return &Blockchain{
 		Chain: newChain,

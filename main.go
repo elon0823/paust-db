@@ -13,10 +13,11 @@ func main() {
 	listenF := flag.String("l", "10000", "wait for incoming connections")
 	target := flag.String("d", "", "target peer to dial")
 	secio := flag.Bool("secio", false, "enable secio")
+	dbpath := flag.String("dpath", ".pdb", "database path to store")
 	seed := flag.Int64("seed", 0, "set random seed for id generation")
 	flag.Parse()
 
-	blockchain, _ := BC.NewBlockchain()
+	blockchain, _ := BC.NewBlockchain(*dbpath)
 	
 	p2pManager, error := P2P.NewP2PManager(blockchain, *host, *listenF, *secio, *seed)
 	if (error == nil) {
