@@ -1,68 +1,68 @@
 package p2p
 
 import (
-	"github.com/golang/protobuf/proto"
+	"bufio"
+	"context"
+	"crypto/rand"
+	"fmt"
+	"io"
+	"log"
+	mrand "math/rand"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	BC "github.com/elon0823/paust-db/blockchain"
+	"github.com/golang/protobuf/proto"
 	libp2p "github.com/libp2p/go-libp2p"
+	crypto "github.com/libp2p/go-libp2p-crypto"
 	host "github.com/libp2p/go-libp2p-host"
 	net "github.com/libp2p/go-libp2p-net"
-	mrand "math/rand"
 	peer "github.com/libp2p/go-libp2p-peer"
-	ma "github.com/multiformats/go-multiaddr"
-	"crypto/rand"
-	crypto "github.com/libp2p/go-libp2p-crypto"
-	"log"
-	"io"
-	"fmt"
-	"context"
 	pstore "github.com/libp2p/go-libp2p-peerstore"
-	"bufio"
-	"strconv"
-	"sync"
-	"os"
-	"strings"
-	"time"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 var mutex = &sync.Mutex{}
 
 type StreamBuffer struct {
 	Stream net.Stream
-	RW bufio.ReadWriter
+	RW     bufio.ReadWriter
 }
 type P2PManager struct {
-	Chain *BC.Blockchain
-	Address string
-	Port string
-	BasicHost host.Host
-	Secio bool
-	Randseed int64
+	Chain         *BC.Blockchain
+	Address       string
+	Port          string
+	BasicHost     host.Host
+	Secio         bool
+	Randseed      int64
 	StreamBuffers []StreamBuffer
 }
 
 func NewP2PManager(bchain *BC.Blockchain, address string, listenPort string, secio bool, randseed int64) (*P2PManager, error) {
 	host, _ := makeBasicHost(address, listenPort, secio, randseed)
 	return &P2PManager{
-		Chain: bchain,
-		Address: address,
-		Port: listenPort,
+		Chain:     bchain,
+		Address:   address,
+		Port:      listenPort,
 		BasicHost: host,
-		Secio: secio,
-		Randseed: randseed,
+		Secio:     secio,
+		Randseed:  randseed,
 	}, nil
 }
 
 func (p2pManager *P2PManager) StartWebServer(port int) {
 
-	webserver, error := NewWebServer(p2pManager.Chain, p2pManager, "localhost",strconv.Itoa(port),10 * time.Second,1 << 20)
-	
-	if (error == nil) {
+	webserver, error := NewWebServer(p2pManager.Chain, p2pManager, "localhost", strconv.Itoa(port), 10*time.Second, 1<<20)
+
+	if error == nil {
 		webserver.Run()
 	}
 }
 func (p2pManager *P2PManager) Run(target string) {
 
-	
 	if target == "" {
 		log.Println("listening for connections")
 		// Set a stream handler on host A. /p2p/1.0.0 is
@@ -123,16 +123,13 @@ func (p2pManager *P2PManager) Run(target string) {
 		} else {
 			p2pManager.StartWebServer(3000)
 		}
-		
+
 		select {} // hang forever
 
 	}
 }
 func makeBasicHost(address string, listenPort string, secio bool, randseed int64) (host.Host, error) {
 
-	// If the seed is zero, use real cryptographic randomness. Otherwise, use a
-	// deterministic randomness source to make generated keys stay the same
-	// across multiple runs
 	var r io.Reader
 	if randseed == 0 {
 		r = rand.Reader
@@ -148,13 +145,9 @@ func makeBasicHost(address string, listenPort string, secio bool, randseed int64
 	}
 
 	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%s",address, listenPort)),
+		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%s", address, listenPort)),
 		libp2p.Identity(priv),
 	}
-
-	// if !secio {
-	// 	opts = append(opts, libp2p.NoEncryption())
-	// }
 
 	basicHost, err := libp2p.New(context.Background(), opts...)
 	if err != nil {
@@ -171,7 +164,7 @@ func makeBasicHost(address string, listenPort string, secio bool, randseed int64
 	log.Printf("I am %s\n", fullAddr)
 	intPort, _ := strconv.ParseInt(listenPort, 10, 32)
 	if secio {
-		log.Printf("Now run \"go run main.go -l %d -d %s -secio\" on a different terminal\n",  intPort+1, fullAddr)
+		log.Printf("Now run \"go run main.go -l %d -d %s -secio\" on a different terminal\n", intPort+1, fullAddr)
 	} else {
 		log.Printf("Now run \"go run main.go -l %d -d %s\" on a different terminal\n", intPort+1, fullAddr)
 	}
@@ -181,29 +174,21 @@ func makeBasicHost(address string, listenPort string, secio bool, randseed int64
 
 func (p2pManager *P2PManager) registerStream(s net.Stream) {
 
-	
 	// Create a buffered stream so that read and writes are non blocking.
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
-	p2pManager.StreamBuffers = append(p2pManager.StreamBuffers, StreamBuffer{Stream:s, RW:*rw})
-	
+	p2pManager.StreamBuffers = append(p2pManager.StreamBuffers, StreamBuffer{Stream: s, RW: *rw})
+
 	// Create a thread to read and write data.
 	go p2pManager.readData(rw, s.Conn().RemotePeer().String())
-	
+
 }
 
 func (p2pManager *P2PManager) handleStream(s net.Stream) {
 
-	// Create a buffer stream for non blocking read and write.
-
 	p2pManager.registerStream(s)
-	
-	log.Println("Got a new stream!", "current = ", len(p2pManager.StreamBuffers))
-	// for _, element := range p2pManager.StreamBuffers {
-	// 	log.Println(element.Stream.Conn().RemotePeer().String())
-	// }
 
-	// stream 's' will stay open until you close it (or the other side closes it).
+	log.Println("Got a new stream!", "current = ", len(p2pManager.StreamBuffers))
 }
 
 func (p2pManager *P2PManager) requestChain() {
@@ -291,16 +276,16 @@ func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, remotePeer string) 
 		if err != nil {
 			log.Fatal(err)
 		}
-		
+
 		if str == "" {
 			return
 		}
-		if( str != "\n") {
+		if str != "\n" {
 			log.Println("from peer ", remotePeer)
 			str = strings.Replace(str, "\n", "", -1)
 			str = strings.Replace(str, "|bbaa", "\n", -1)
-			
-			p2pMessage := &P2PMessage {}
+
+			p2pMessage := &P2PMessage{}
 			if err := proto.Unmarshal([]byte(str), p2pMessage); err != nil {
 				log.Fatal(err)
 			} else {
@@ -321,8 +306,8 @@ func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, remotePeer string) 
 
 				default:
 					fmt.Println("no method ", p2pMessage.Path)
-				}	
-			}			
+				}
+			}
 		}
 	}
 }

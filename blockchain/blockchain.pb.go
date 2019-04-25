@@ -4,12 +4,13 @@
 package blockchain
 
 import (
-	fmt "fmt"
-	proto "github.com/golang/protobuf/proto"
-	math "math"
-	"errors"
-	"log"
 	"encoding/json"
+	"errors"
+	fmt "fmt"
+	"log"
+	math "math"
+
+	proto "github.com/golang/protobuf/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -62,7 +63,7 @@ func (m *Blockchain) GetChain() []*Block {
 	return nil
 }
 func (blockchain *Blockchain) Length() int {
-	return len(blockchain.Chain) 
+	return len(blockchain.Chain)
 }
 
 func (blockchain *Blockchain) LastBlock() Block {
@@ -85,8 +86,7 @@ func (blockchain *Blockchain) AddBlock(bpm int32) error {
 }
 
 func (blockchain *Blockchain) ReplaceChain(newChain *Blockchain) {
-	
-	
+
 	if newChain.Length() > blockchain.Length() {
 		blockchain.Chain = newChain.Chain
 		blockchain.PrintChain()
@@ -130,17 +130,18 @@ func (blockchain *Blockchain) loadBlock(index int32) error {
 	return nil
 }
 
-
-func NewBlockchain(storePath string) (*Blockchain, error) {
+func NewBlockchain(storePath string, savedb bool) (*Blockchain, error) {
 	genesisBlock := Genesis()
 	newChain := []*Block{genesisBlock}
-	InitBlockStore(storePath)
+
+	if savedb {
+		InitBlockStore(storePath)
+	}
 
 	return &Blockchain{
 		Chain: newChain,
 	}, nil
 }
-
 
 func init() {
 	proto.RegisterType((*Blockchain)(nil), "blockchain.Blockchain")
