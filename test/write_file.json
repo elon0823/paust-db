@@ -1,5 +1,0 @@
-[
-        {"timestamp":1544772882435375000,"ownerId":"owner1","qualifier":"{\"type\":\"temperature\"}","data":"YWJj"},
-        {"timestamp":1544772960049177000,"ownerId":"owner2","qualifier":"{\"type\":\"speed\"}","data":"ZGVm"},
-        {"timestamp":1544772967331458000,"ownerId":"owner3","qualifier":"{\"type\":\"price\"}","data":"Z2hp"}
-]
