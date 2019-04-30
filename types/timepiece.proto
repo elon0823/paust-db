@@ -1,0 +1,9 @@
+syntax = "proto3";
+package types;
+
+message TimePiece {
+    uint64 timestamp = 1;
+    string ownerID = 2;
+    string source = 3;
+    bytes data = 4;
+}
