@@ -1,0 +1,10 @@
+syntax = "proto3";
+package types;
+
+message P2PMessage {
+    string id = 1;
+    int32 path = 2;
+    bytes data = 3;
+    uint64 timestamp = 4;
+    string sender = 5;
+}

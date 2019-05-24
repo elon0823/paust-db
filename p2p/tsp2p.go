@@ -5,166 +5,267 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sync"
-
+	"io"
+	"log"
+	"strings"
+	mrand "math/rand"
+	"crypto/rand"
 	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p-discovery"
-	libp2pdht "github.com/libp2p/go-libp2p-kad-dht"
-	inet "github.com/libp2p/go-libp2p-net"
-	"github.com/libp2p/go-libp2p-peerstore"
-	"github.com/libp2p/go-libp2p-protocol"
-	multiaddr "github.com/multiformats/go-multiaddr"
-	"github.com/ipfs/go-log"
-	logging "github.com/whyrusleeping/go-logging"
+	host "github.com/libp2p/go-libp2p-host"
+	net "github.com/libp2p/go-libp2p-net"
+	peer "github.com/libp2p/go-libp2p-peer"
+	pstore "github.com/libp2p/go-libp2p-peerstore"
+	ma "github.com/multiformats/go-multiaddr"
+	crypto "github.com/libp2p/go-libp2p-crypto"
+	"strconv"
+	"github.com/golang/protobuf/proto"
+	"github.com/elon0823/paust-db/types"
+	"time"
+	"github.com/elon0823/paust-db/util"
 )
 
-var logger = log.Logger("rendezvous")
-
-type P2PManager struct {
-	Cfgs       Config
-
+type StreamBuffer struct {
+	Stream net.Stream
+	RW     bufio.ReadWriter
 }
 
-func NewP2PManager() (*P2PManager, error) {
+type P2PManager struct {
+	Address       string
+	Port          string
+	BasicHost     host.Host
+	Secio         bool
+	Randseed      int64
+	StreamBuffers []StreamBuffer
+	HandledMsgBuffer []string
+	HandleMsgLimit int
+}
 
-	config, err := ParseFlags()
-	if err != nil {
-		panic(err)
-	}
+func NewP2PManager(address string, listenPort string, secio bool, randseed int64) (*P2PManager, error) {
+
+	host, _ := makeBasicHost(address, listenPort, secio, randseed)
 	
 	return &P2PManager{
-		Cfgs:   config,
+		Address:   address,
+		Port:      listenPort,
+		BasicHost: host,
+		Secio:     secio,
+		Randseed:  randseed,
+		HandleMsgLimit: 10,
 	}, nil
 }
 
-func (p2pManager *P2PManager) Run() {
+func makeBasicHost(address string, listenPort string, secio bool, randseed int64) (host.Host, error) {
 
-	log.SetAllLoggers(logging.WARNING)
-	log.SetLogLevel("rendezvous", "debug")
+	var r io.Reader
+	if randseed == 0 {
+		r = rand.Reader
+	} else {
+		r = mrand.New(mrand.NewSource(randseed))
+	}
 
-	ctx := context.Background()
-
-	// libp2p.New constructs a new libp2p Host. Other options can be added
-	// here.
-	host, err := libp2p.New(ctx,
-		libp2p.ListenAddrs([]multiaddr.Multiaddr(p2pManager.Cfgs.ListenAddresses)...),
-	)
+	// Generate a key pair for this host. We will use it
+	// to obtain a valid host ID.
+	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	logger.Info("Host created. We are:", host.ID())
-	logger.Info(host.Addrs())
 
-	// Set a function as stream handler. This function is called when a peer
-	// initiates a connection and starts a stream with this peer.
-	host.SetStreamHandler(protocol.ID(p2pManager.Cfgs.ProtocolID), handleStream)
+	opts := []libp2p.Option{
+		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%s", address, listenPort)),
+		libp2p.Identity(priv),
+	}
 
-	// Start a DHT, for use in peer discovery. We can't just make a new DHT
-	// client because we want each peer to maintain its own local copy of the
-	// DHT, so that the bootstrapping node of the DHT can go down without
-	// inhibiting future peer discovery.
-	kademliaDHT, err := libp2pdht.New(ctx, host)
+	basicHost, err := libp2p.New(context.Background(), opts...)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	// Bootstrap the DHT. In the default configuration, this spawns a Background
-	// thread that will refresh the peer table every five minutes.
-	logger.Debug("Bootstrapping the DHT")
-	if err = kademliaDHT.Bootstrap(ctx); err != nil {
-		panic(err)
+	// Build host multiaddress
+	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ipfs/%s", basicHost.ID().Pretty()))
+
+	// Now we can build a full multiaddress to reach this host
+	// by encapsulating both addresses:
+	addr := basicHost.Addrs()[0]
+	fullAddr := addr.Encapsulate(hostAddr)
+	log.Printf("I am %s\n", fullAddr)
+	intPort, _ := strconv.ParseInt(listenPort, 10, 32)
+	if secio {
+		log.Printf("Now run \"go run main.go -l %d -d %s -secio\" on a different terminal\n", intPort+1, fullAddr)
+	} else {
+		log.Printf("Now run \"go run main.go -l %d -d %s\" on a different terminal\n", intPort+1, fullAddr)
 	}
 
-	// Let's connect to the bootstrap nodes first. They will tell us about the
-	// other nodes in the network.
-	var wg sync.WaitGroup
-	for _, peerAddr := range p2pManager.Cfgs.BootstrapPeers {
-		peerinfo, _ := peerstore.InfoFromP2pAddr(peerAddr)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := host.Connect(ctx, *peerinfo); err != nil {
-				logger.Warning(err)
-			} else {
-				logger.Info("Connection established with bootstrap node:", *peerinfo)
-			}
-		}()
-	}
-	wg.Wait()
+	return basicHost, nil
+}
 
-	// We use a rendezvous point "meet me here" to announce our location.
-	// This is like telling your friends to meet you at the Eiffel Tower.
-	logger.Info("Announcing ourselves...")
-	routingDiscovery := discovery.NewRoutingDiscovery(kademliaDHT)
-	discovery.Advertise(ctx, routingDiscovery, p2pManager.Cfgs.RendezvousString)
-	logger.Debug("Successfully announced!")
+func (p2pManager *P2PManager) Run(target string) {
 
-	// Now, look for others who have announced
-	// This is like your friend telling you the location to meet you.
-	logger.Debug("Searching for other peers...")
-	peerChan, err := routingDiscovery.FindPeers(ctx, p2pManager.Cfgs.RendezvousString)
-	if err != nil {
-		panic(err)
-	}
+	if target == "" {
+		log.Println("listening for connections")
+		// Set a stream handler on host A. /p2p/1.0.0 is
+		// a user-defined protocol name.
+		p2pManager.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pManager.handleStream)
+		// go p2pManager.writeData()
 
-	for peer := range peerChan {
-		if peer.ID == host.ID() {
-			continue
-		}
-		logger.Debug("Found peer:", peer)
+		select {} // hang forever
+		/**** This is where the listener code ends ****/
+	} else {
+		p2pManager.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pManager.handleStream)
 
-		logger.Debug("Connecting to:", peer)
-		stream, err := host.NewStream(ctx, peer.ID, protocol.ID(p2pManager.Cfgs.ProtocolID))
-
+		// The following code extracts target's peer ID from the
+		// given multiaddress
+		ipfsaddr, err := ma.NewMultiaddr(target)
 		if err != nil {
-			logger.Warning("Connection failed:", err)
-			continue
-		} else {
-			rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-
-			go writeData(rw)
-			go readData(rw)
+			log.Fatalln(err)
 		}
 
-		logger.Info("Connected to:", peer)
+		pid, err := ipfsaddr.ValueForProtocol(ma.P_IPFS)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		peerid, err := peer.IDB58Decode(pid)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		fmt.Println("i m peer ", p2pManager.BasicHost.ID())
+
+		// Decapsulate the /ipfs/<peerID> part from the target
+		// /ip4/<a.b.c.d>/ipfs/<peer> becomes /ip4/<a.b.c.d>
+		targetPeerAddr, _ := ma.NewMultiaddr(
+			fmt.Sprintf("/ipfs/%s", peer.IDB58Encode(peerid)))
+		targetAddr := ipfsaddr.Decapsulate(targetPeerAddr)
+
+		// We have a peer ID and a targetAddr so we add it to the peerstore
+		// so LibP2P knows how to contact it
+		
+		p2pManager.BasicHost.Peerstore().AddAddr(peerid, targetAddr, pstore.PermanentAddrTTL)
+		
+		
+		log.Println("opening stream")
+		// make a new stream from host B to host A
+		// it should be handled on host A by the handler we set above because
+		// we use the same /p2p/1.0.0 protocol
+		s, err := p2pManager.BasicHost.NewStream(context.Background(), peerid, "/p2p/1.0.0")
+		
+		if err != nil {
+			log.Fatalln(err)
+		}
+		
+		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+		p2pManager.StreamBuffers = append(p2pManager.StreamBuffers, StreamBuffer{Stream: s, RW: *rw})
+
+		go p2pManager.readData(rw, s)
+		go p2pManager.writeData(rw, s)
+
+		select {} // hang forever
+
+	}
+}
+
+func (p2pManager *P2PManager) handleStream(s net.Stream) {
+
+	
+	//p2pManager.registerStream(s)
+
+	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+
+	p2pManager.StreamBuffers = append(p2pManager.StreamBuffers, StreamBuffer{Stream: s, RW: *rw})
+
+	go p2pManager.readData(rw, s)
+	go p2pManager.writeData(rw, s)
+
+	log.Println("Got a new stream!")
+}
+
+func (p2pManager *P2PManager) appendMsgToBuffer(msgID string) {
+	
+	if len(p2pManager.HandledMsgBuffer) > p2pManager.HandleMsgLimit {
+		p2pManager.HandledMsgBuffer = append(p2pManager.HandledMsgBuffer[1:], msgID)
+	} else {
+		p2pManager.HandledMsgBuffer = append(p2pManager.HandledMsgBuffer, msgID)
 	}
 
-	select {}
+}
+func (p2pManager *P2PManager) checkMsgInBuffer(msgID string) bool {
+
+	for _, element := range p2pManager.HandledMsgBuffer {
+		if element == msgID { return true }
+	}
+	return false
 }
 
-func handleStream(stream inet.Stream) {
-	logger.Info("Got a new stream!")
-
-	// Create a buffer stream for non blocking read and write.
-	rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-
-	go readData(rw)
-	go writeData(rw)
-
-	// 'stream' will stay open until you close it (or the other side closes it).
+func (p2pManager *P2PManager) sendMsgToAll(str string) {
+	for _, element := range p2pManager.StreamBuffers {
+		rw := element.RW
+		rw.WriteString(fmt.Sprintf("%s\n", str))
+		rw.Flush()
+	}
 }
 
-func readData(rw *bufio.ReadWriter) {
+func (p2pManager *P2PManager) propagateMsg(str string, s net.Stream) {
+
+	for _, element := range p2pManager.StreamBuffers {
+		peerID := element.Stream.Conn().RemotePeer().String()
+
+		if peerID != s.Conn().RemotePeer().String() {
+			rw := element.RW
+			rw.WriteString(fmt.Sprintf("%s\n", str))
+			rw.Flush()
+		}
+	}
+}
+func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, s net.Stream) {
+
 	for {
-		str, err := rw.ReadString('\n')
+		receivedStr, err := rw.ReadString('\n')
 		if err != nil {
 			fmt.Println("Error reading from buffer")
 			panic(err)
 		}
 
-		if str == "" {
+		if receivedStr == "" {
 			return
 		}
-		if str != "\n" {
+		if receivedStr != "\n" {
 			// Green console colour: 	\x1b[32m
 			// Reset console colour: 	\x1b[0m
-			fmt.Printf("\x1b[32m%s\x1b[0m> ", str)
-		}
+			log.Println("received from peer ", s.Conn().RemotePeer().String())
+			
+			
+			str := strings.Replace(receivedStr, "\n", "", -1)
+			str = strings.Replace(str, "|bbaa", "\n", -1)
+			
+			p2pMessage := &types.P2PMessage{}
+			if err := proto.Unmarshal([]byte(str), p2pMessage); err != nil {
+				log.Fatal(err)
+			} else {
+				log.Println("original sender peer ", p2pMessage.Sender)
 
+				isAleadyReceived := p2pManager.checkMsgInBuffer(p2pMessage.Id)
+
+				if !isAleadyReceived {
+					p2pManager.appendMsgToBuffer(p2pMessage.Id)
+
+					switch p2pMessage.Path {
+					case types.MSG:
+						fmt.Println(string(p2pMessage.Data))
+					case types.PUB_SUPERNODE:
+						fmt.Println("super node registered with peer id ", s.Conn().RemotePeer().String())
+					default:
+						fmt.Println("no method ", p2pMessage.Path)
+					}
+	
+					p2pManager.propagateMsg(receivedStr, s)
+				} else {
+					log.Println("already received msg..")
+				}
+			}
+		}
 	}
 }
 
-func writeData(rw *bufio.ReadWriter) {
+func (p2pManager *P2PManager) writeData(rw *bufio.ReadWriter, s net.Stream) {
 	stdReader := bufio.NewReader(os.Stdin)
 
 	for {
@@ -175,15 +276,30 @@ func writeData(rw *bufio.ReadWriter) {
 			panic(err)
 		}
 
-		_, err = rw.WriteString(fmt.Sprintf("%s\n", sendData))
-		if err != nil {
-			fmt.Println("Error writing to buffer")
-			panic(err)
+		p2pMsg := &types.P2PMessage{
+			Id: "",
+			Path: types.MSG,
+			Data: []byte(sendData),
+			Timestamp: uint64(time.Now().UnixNano()),
+			Sender: p2pManager.BasicHost.ID().String(),
 		}
-		err = rw.Flush()
-		if err != nil {
-			fmt.Println("Error flushing buffer")
-			panic(err)
-		}
+		p2pMsg.Id = util.CalculateHash(strconv.FormatUint(p2pMsg.Timestamp, 10), strconv.FormatInt(int64(p2pMsg.Path), 10), string(p2pMsg.Data))
+		bytes, _ := proto.Marshal(p2pMsg)
+		
+		str := string(bytes)
+		str = strings.Replace(str, "\n", "|bbaa", -1)
+
+		p2pManager.sendMsgToAll(fmt.Sprintf("%s\n", str))
+		
+		// _, err = rw.WriteString(fmt.Sprintf("%s\n", str))
+		// if err != nil {
+		// 	fmt.Println("Error writing to buffer")
+		// 	panic(err)
+		// }
+		// err = rw.Flush()
+		// if err != nil {
+		// 	fmt.Println("Error flushing buffer")
+		// 	panic(err)
+		// }
 	}
 }
