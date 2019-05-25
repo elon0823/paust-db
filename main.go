@@ -14,13 +14,22 @@ func main() {
 	secio := flag.Bool("secio", false, "enable secio")
 	//dbpath := flag.String("dpath", ".pdb", "database path to store")
 	seed := flag.Int64("seed", 0, "set random seed for id generation")
+	mode := flag.String("m", "", "node mode. (b), (s), (n)")
 	//store := flag.Bool("savedb", false, "save db")
 
 	flag.Parse()
 
-	p2pNode, error := P2P.NewP2PNode(*host, *listenF, *secio, *seed)
-	if error == nil {
-		p2pNode.Run(*target)
+	if *mode=="b" {
+		bootstrapNode, error := P2P.NewBootstrapNode(*host, *listenF, *secio, *seed)
+		if error == nil {
+			bootstrapNode.Run()
+		}
+	} else {
+		p2pNode, error := P2P.NewP2PNode(*host, *listenF, *secio, *seed, *mode)
+		if error == nil {
+			p2pNode.Run(*target)
+		}
 	}
+	
 
 }

@@ -2,18 +2,14 @@ package p2p
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"log"
+	"time"
 	"strings"
-
 	"github.com/elon0823/paust-db/types"
 	"github.com/golang/protobuf/proto"
 	host "github.com/libp2p/go-libp2p-host"
 	net "github.com/libp2p/go-libp2p-net"
-	peer "github.com/libp2p/go-libp2p-peer"
-	pstore "github.com/libp2p/go-libp2p-peerstore"
-	ma "github.com/multiformats/go-multiaddr"
 )
 
 type BootstrapNode struct {
@@ -22,6 +18,7 @@ type BootstrapNode struct {
 	BasicHost host.Host
 	Secio     bool
 	Randseed  int64
+	SuperNodePool NodePool
 }
 
 func NewBootstrapNode(address string, listenPort string, secio bool, randseed int64) (*BootstrapNode, error) {
@@ -34,69 +31,28 @@ func NewBootstrapNode(address string, listenPort string, secio bool, randseed in
 		BasicHost: host,
 		Secio:     secio,
 		Randseed:  randseed,
+		SuperNodePool:   NodePool{
+			TimeoutSec: 60,
+		},
 	}, nil
 }
 
-func (bootstrapNode *BootstrapNode) Run(target string) {
-
-	if target == "" {
-		log.Println("listening for connections")
-		// Set a stream handler on host A. /p2p/1.0.0 is
-		// a user-defined protocol name.
-		bootstrapNode.BasicHost.SetStreamHandler("/p2p/1.0.0", bootstrapNode.handleStream)
-		// go p2pManager.writeData()
-
-		select {} // hang forever
-		/**** This is where the listener code ends ****/
-	} else {
-		bootstrapNode.BasicHost.SetStreamHandler("/p2p/1.0.0", bootstrapNode.handleStream)
-
-		// The following code extracts target's peer ID from the
-		// given multiaddress
-		ipfsaddr, err := ma.NewMultiaddr(target)
-		if err != nil {
-			log.Fatalln(err)
+func (bootstrapNode *BootstrapNode) Run() {
+	log.Println("running bootstrap node..")
+	log.Println("listening for connections")
+	// Set a stream handler on host A. /p2p/1.0.0 is
+	// a user-defined protocol name.
+	bootstrapNode.BasicHost.SetStreamHandler("/p2p/bootstrap/1.0.0", bootstrapNode.handleStream)
+	// go p2pManager.writeData()
+	
+	ticker := time.NewTicker(time.Second * 5)
+	go func() {
+		for range ticker.C {
+			bootstrapNode.SuperNodePool.CheckTimeout()
 		}
+	}()
 
-		pid, err := ipfsaddr.ValueForProtocol(ma.P_IPFS)
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		peerid, err := peer.IDB58Decode(pid)
-		if err != nil {
-			log.Fatalln(err)
-		}
-		fmt.Println("i m peer ", bootstrapNode.BasicHost.ID())
-
-		// Decapsulate the /ipfs/<peerID> part from the target
-		// /ip4/<a.b.c.d>/ipfs/<peer> becomes /ip4/<a.b.c.d>
-		targetPeerAddr, _ := ma.NewMultiaddr(
-			fmt.Sprintf("/ipfs/%s", peer.IDB58Encode(peerid)))
-		targetAddr := ipfsaddr.Decapsulate(targetPeerAddr)
-
-		// We have a peer ID and a targetAddr so we add it to the peerstore
-		// so LibP2P knows how to contact it
-
-		bootstrapNode.BasicHost.Peerstore().AddAddr(peerid, targetAddr, pstore.PermanentAddrTTL)
-
-		log.Println("opening stream")
-		// make a new stream from host B to host A
-		// it should be handled on host A by the handler we set above because
-		// we use the same /p2p/1.0.0 protocol
-		s, err := bootstrapNode.BasicHost.NewStream(context.Background(), peerid, "/p2p/1.0.0")
-
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-
-		go bootstrapNode.readData(rw, s)
-
-		select {} // hang forever
-
-	}
+	select {} // hang forever
 }
 
 func (bootstrapNode *BootstrapNode) handleStream(s net.Stream) {
@@ -116,7 +72,9 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 		receivedStr, err := rw.ReadString('\n')
 		if err != nil {
 			fmt.Println("Error reading from buffer")
-			panic(err)
+			rw = nil
+			s.Close()
+			break
 		}
 
 		if receivedStr == "" {
@@ -140,7 +98,25 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 				case types.MSG:
 					fmt.Println(string(p2pMessage.Data))
 				case types.PUB_SUPERNODE:
-					fmt.Println("super node registered with peer id ", s.Conn().RemotePeer().String())
+					nodeHeader := &NodeHeader{}
+					if err := proto.Unmarshal([]byte(p2pMessage.Data), nodeHeader); err != nil {
+						log.Fatal(err)
+					} else {
+						nodePulse := &NodePulse {
+							NodeHeader: *nodeHeader,
+							LastTimestamp: time.Now().Unix(),
+						}
+						bootstrapNode.SuperNodePool.AddNodePulse(*nodePulse)
+						fmt.Println("super node registed with peer id = ", nodeHeader.PeerId)
+					}
+				case types.HEARTBEAT:
+					nodeHeader := &NodeHeader{}
+					if err := proto.Unmarshal([]byte(p2pMessage.Data), nodeHeader); err != nil {
+						log.Fatal(err)
+					} else {
+						bootstrapNode.SuperNodePool.Update(nodeHeader.PeerId)
+						fmt.Println("heartbeat with peer id = ", nodeHeader.PeerId)
+					}
 				default:
 					fmt.Println("no method ", p2pMessage.Path)
 				}

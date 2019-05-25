@@ -17,6 +17,7 @@ const (
 	PUT_SOURCE_DATA
 	QUERY_SOURCE_META
 	GET_SOURCE_META_LIST
+	HEARTBEAT
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
