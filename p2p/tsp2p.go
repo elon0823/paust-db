@@ -3,25 +3,26 @@ package p2p
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"fmt"
-	"os"
 	"io"
 	"log"
-	"strings"
 	mrand "math/rand"
-	"crypto/rand"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/elon0823/paust-db/types"
+	"github.com/elon0823/paust-db/util"
+	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p"
+	crypto "github.com/libp2p/go-libp2p-crypto"
 	host "github.com/libp2p/go-libp2p-host"
 	net "github.com/libp2p/go-libp2p-net"
 	peer "github.com/libp2p/go-libp2p-peer"
 	pstore "github.com/libp2p/go-libp2p-peerstore"
 	ma "github.com/multiformats/go-multiaddr"
-	crypto "github.com/libp2p/go-libp2p-crypto"
-	"strconv"
-	"github.com/golang/protobuf/proto"
-	"github.com/elon0823/paust-db/types"
-	"time"
-	"github.com/elon0823/paust-db/util"
 )
 
 type StreamBuffer struct {
@@ -29,27 +30,27 @@ type StreamBuffer struct {
 	RW     bufio.ReadWriter
 }
 
-type P2PManager struct {
-	Address       string
-	Port          string
-	BasicHost     host.Host
-	Secio         bool
-	Randseed      int64
-	StreamBuffers []StreamBuffer
+type P2PNode struct {
+	Address          string
+	Port             string
+	BasicHost        host.Host
+	Secio            bool
+	Randseed         int64
+	StreamBuffers    []StreamBuffer
 	HandledMsgBuffer []string
-	HandleMsgLimit int
+	HandleMsgLimit   int
 }
 
-func NewP2PManager(address string, listenPort string, secio bool, randseed int64) (*P2PManager, error) {
+func NewP2PNode(address string, listenPort string, secio bool, randseed int64) (*P2PNode, error) {
 
 	host, _ := makeBasicHost(address, listenPort, secio, randseed)
-	
-	return &P2PManager{
-		Address:   address,
-		Port:      listenPort,
-		BasicHost: host,
-		Secio:     secio,
-		Randseed:  randseed,
+
+	return &P2PNode{
+		Address:        address,
+		Port:           listenPort,
+		BasicHost:      host,
+		Secio:          secio,
+		Randseed:       randseed,
 		HandleMsgLimit: 10,
 	}, nil
 }
@@ -98,19 +99,19 @@ func makeBasicHost(address string, listenPort string, secio bool, randseed int64
 	return basicHost, nil
 }
 
-func (p2pManager *P2PManager) Run(target string) {
+func (p2pNode *P2PNode) Run(target string) {
 
 	if target == "" {
 		log.Println("listening for connections")
 		// Set a stream handler on host A. /p2p/1.0.0 is
 		// a user-defined protocol name.
-		p2pManager.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pManager.handleStream)
+		p2pNode.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pNode.handleStream)
 		// go p2pManager.writeData()
 
 		select {} // hang forever
 		/**** This is where the listener code ends ****/
 	} else {
-		p2pManager.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pManager.handleStream)
+		p2pNode.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pNode.handleStream)
 
 		// The following code extracts target's peer ID from the
 		// given multiaddress
@@ -128,7 +129,7 @@ func (p2pManager *P2PManager) Run(target string) {
 		if err != nil {
 			log.Fatalln(err)
 		}
-		fmt.Println("i m peer ", p2pManager.BasicHost.ID())
+		fmt.Println("i m peer ", p2pNode.BasicHost.ID())
 
 		// Decapsulate the /ipfs/<peerID> part from the target
 		// /ip4/<a.b.c.d>/ipfs/<peer> becomes /ip4/<a.b.c.d>
@@ -138,74 +139,74 @@ func (p2pManager *P2PManager) Run(target string) {
 
 		// We have a peer ID and a targetAddr so we add it to the peerstore
 		// so LibP2P knows how to contact it
-		
-		p2pManager.BasicHost.Peerstore().AddAddr(peerid, targetAddr, pstore.PermanentAddrTTL)
-		
-		
+
+		p2pNode.BasicHost.Peerstore().AddAddr(peerid, targetAddr, pstore.PermanentAddrTTL)
+
 		log.Println("opening stream")
 		// make a new stream from host B to host A
 		// it should be handled on host A by the handler we set above because
 		// we use the same /p2p/1.0.0 protocol
-		s, err := p2pManager.BasicHost.NewStream(context.Background(), peerid, "/p2p/1.0.0")
-		
+		s, err := p2pNode.BasicHost.NewStream(context.Background(), peerid, "/p2p/1.0.0")
+
 		if err != nil {
 			log.Fatalln(err)
 		}
-		
-		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-		p2pManager.StreamBuffers = append(p2pManager.StreamBuffers, StreamBuffer{Stream: s, RW: *rw})
 
-		go p2pManager.readData(rw, s)
-		go p2pManager.writeData(rw, s)
+		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+		p2pNode.StreamBuffers = append(p2pNode.StreamBuffers, StreamBuffer{Stream: s, RW: *rw})
+
+		go p2pNode.readData(rw, s)
+		go p2pNode.writeData(rw, s)
 
 		select {} // hang forever
 
 	}
 }
 
-func (p2pManager *P2PManager) handleStream(s net.Stream) {
+func (p2pNode *P2PNode) handleStream(s net.Stream) {
 
-	
 	//p2pManager.registerStream(s)
 
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
-	p2pManager.StreamBuffers = append(p2pManager.StreamBuffers, StreamBuffer{Stream: s, RW: *rw})
+	p2pNode.StreamBuffers = append(p2pNode.StreamBuffers, StreamBuffer{Stream: s, RW: *rw})
 
-	go p2pManager.readData(rw, s)
-	go p2pManager.writeData(rw, s)
+	go p2pNode.readData(rw, s)
+	go p2pNode.writeData(rw, s)
 
 	log.Println("Got a new stream!")
 }
 
-func (p2pManager *P2PManager) appendMsgToBuffer(msgID string) {
-	
-	if len(p2pManager.HandledMsgBuffer) > p2pManager.HandleMsgLimit {
-		p2pManager.HandledMsgBuffer = append(p2pManager.HandledMsgBuffer[1:], msgID)
+func (p2pNode *P2PNode) appendMsgToBuffer(msgID string) {
+
+	if len(p2pNode.HandledMsgBuffer) > p2pNode.HandleMsgLimit {
+		p2pNode.HandledMsgBuffer = append(p2pNode.HandledMsgBuffer[1:], msgID)
 	} else {
-		p2pManager.HandledMsgBuffer = append(p2pManager.HandledMsgBuffer, msgID)
+		p2pNode.HandledMsgBuffer = append(p2pNode.HandledMsgBuffer, msgID)
 	}
 
 }
-func (p2pManager *P2PManager) checkMsgInBuffer(msgID string) bool {
+func (p2pNode *P2PNode) checkMsgInBuffer(msgID string) bool {
 
-	for _, element := range p2pManager.HandledMsgBuffer {
-		if element == msgID { return true }
+	for _, element := range p2pNode.HandledMsgBuffer {
+		if element == msgID {
+			return true
+		}
 	}
 	return false
 }
 
-func (p2pManager *P2PManager) sendMsgToAll(str string) {
-	for _, element := range p2pManager.StreamBuffers {
+func (p2pNode *P2PNode) sendMsgToAll(str string) {
+	for _, element := range p2pNode.StreamBuffers {
 		rw := element.RW
 		rw.WriteString(fmt.Sprintf("%s\n", str))
 		rw.Flush()
 	}
 }
 
-func (p2pManager *P2PManager) propagateMsg(str string, s net.Stream) {
+func (p2pNode *P2PNode) propagateMsg(str string, s net.Stream) {
 
-	for _, element := range p2pManager.StreamBuffers {
+	for _, element := range p2pNode.StreamBuffers {
 		peerID := element.Stream.Conn().RemotePeer().String()
 
 		if peerID != s.Conn().RemotePeer().String() {
@@ -215,7 +216,7 @@ func (p2pManager *P2PManager) propagateMsg(str string, s net.Stream) {
 		}
 	}
 }
-func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, s net.Stream) {
+func (p2pNode *P2PNode) readData(rw *bufio.ReadWriter, s net.Stream) {
 
 	for {
 		receivedStr, err := rw.ReadString('\n')
@@ -231,21 +232,20 @@ func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, s net.Stream) {
 			// Green console colour: 	\x1b[32m
 			// Reset console colour: 	\x1b[0m
 			log.Println("received from peer ", s.Conn().RemotePeer().String())
-			
-			
+
 			str := strings.Replace(receivedStr, "\n", "", -1)
 			str = strings.Replace(str, "|bbaa", "\n", -1)
-			
+
 			p2pMessage := &types.P2PMessage{}
 			if err := proto.Unmarshal([]byte(str), p2pMessage); err != nil {
 				log.Fatal(err)
 			} else {
 				log.Println("original sender peer ", p2pMessage.Sender)
 
-				isAleadyReceived := p2pManager.checkMsgInBuffer(p2pMessage.Id)
+				isAleadyReceived := p2pNode.checkMsgInBuffer(p2pMessage.Id)
 
 				if !isAleadyReceived {
-					p2pManager.appendMsgToBuffer(p2pMessage.Id)
+					p2pNode.appendMsgToBuffer(p2pMessage.Id)
 
 					switch p2pMessage.Path {
 					case types.MSG:
@@ -255,8 +255,8 @@ func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, s net.Stream) {
 					default:
 						fmt.Println("no method ", p2pMessage.Path)
 					}
-	
-					p2pManager.propagateMsg(receivedStr, s)
+
+					p2pNode.propagateMsg(receivedStr, s)
 				} else {
 					log.Println("already received msg..")
 				}
@@ -265,32 +265,34 @@ func (p2pManager *P2PManager) readData(rw *bufio.ReadWriter, s net.Stream) {
 	}
 }
 
-func (p2pManager *P2PManager) writeData(rw *bufio.ReadWriter, s net.Stream) {
+func (p2pNode *P2PNode) writeData(rw *bufio.ReadWriter, s net.Stream) {
 	stdReader := bufio.NewReader(os.Stdin)
 
 	for {
 		fmt.Print("> ")
 		sendData, err := stdReader.ReadString('\n')
+		fmt.Println(sendData)
 		if err != nil {
 			fmt.Println("Error reading from stdin")
 			panic(err)
 		}
 
 		p2pMsg := &types.P2PMessage{
-			Id: "",
-			Path: types.MSG,
-			Data: []byte(sendData),
+			Id:        "",
+			Path:      types.MSG,
+			Data:      []byte(sendData),
 			Timestamp: uint64(time.Now().UnixNano()),
-			Sender: p2pManager.BasicHost.ID().String(),
+			Sender:    p2pNode.BasicHost.ID().String(),
 		}
+
 		p2pMsg.Id = util.CalculateHash(strconv.FormatUint(p2pMsg.Timestamp, 10), strconv.FormatInt(int64(p2pMsg.Path), 10), string(p2pMsg.Data))
 		bytes, _ := proto.Marshal(p2pMsg)
-		
+
 		str := string(bytes)
 		str = strings.Replace(str, "\n", "|bbaa", -1)
 
-		p2pManager.sendMsgToAll(fmt.Sprintf("%s\n", str))
-		
+		p2pNode.sendMsgToAll(fmt.Sprintf("%s\n", str))
+
 		// _, err = rw.WriteString(fmt.Sprintf("%s\n", str))
 		// if err != nil {
 		// 	fmt.Println("Error writing to buffer")

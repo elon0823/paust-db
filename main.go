@@ -1,8 +1,9 @@
 package main
 
 import (
-	P2P "github.com/elon0823/paust-db/p2p"
 	"flag"
+
+	P2P "github.com/elon0823/paust-db/p2p"
 )
 
 func main() {
@@ -17,9 +18,9 @@ func main() {
 
 	flag.Parse()
 
-	p2pManager, error := P2P.NewP2PManager(*host, *listenF, *secio, *seed)
+	p2pNode, error := P2P.NewP2PNode(*host, *listenF, *secio, *seed)
 	if error == nil {
-		p2pManager.Run(*target)
+		p2pNode.Run(*target)
 	}
 
 }
