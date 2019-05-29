@@ -240,17 +240,8 @@ func (p2pNode *P2PNode) publishSuperNode() {
 
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
-	headerBytes, _ := proto.Marshal(&p2pNode.Header) 
-	p2pMsg := &types.P2PMessage{
-		Id:        "",
-		Path:      types.PUB_SUPERNODE,
-		Data:      headerBytes,
-		Timestamp: uint64(time.Now().UnixNano()),
-		Sender:    p2pNode.BasicHost.ID().String(),
-	}
-	
-	p2pMsg.Id = util.CalculateHash(strconv.FormatUint(p2pMsg.Timestamp, 10), strconv.FormatInt(int64(p2pMsg.Path), 10), string(p2pMsg.Data))
-	bytes, _ := proto.Marshal(p2pMsg)
+	headerBytes, _ := proto.Marshal(&p2pNode.Header)
+	bytes := util.MakeMsgBytes(types.PUB_SUPERNODE, headerBytes, p2pNode.BasicHost.ID().String()) 
 
 	str := string(bytes)
 	str = strings.Replace(str, "\n", "|bbaa", -1)
@@ -290,18 +281,10 @@ func (p2pNode *P2PNode) startHeartbeatToBootstrap() {
 	}
 
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-
-	headerBytes, _ := proto.Marshal(&p2pNode.Header) 
-	p2pMsg := &types.P2PMessage{
-		Id:        "",
-		Path:      types.HEARTBEAT,
-		Data:      headerBytes,
-		Timestamp: uint64(time.Now().UnixNano()),
-		Sender:    p2pNode.BasicHost.ID().String(),
-	}
 	
-	p2pMsg.Id = util.CalculateHash(strconv.FormatUint(p2pMsg.Timestamp, 10), strconv.FormatInt(int64(p2pMsg.Path), 10), string(p2pMsg.Data))
-	bytes, _ := proto.Marshal(p2pMsg)
+	headerBytes, _ := proto.Marshal(&p2pNode.Header) 
+
+	bytes := util.MakeMsgBytes(types.HEARTBEAT, headerBytes, p2pNode.BasicHost.ID().String())
 
 	str := string(bytes)
 	str = strings.Replace(str, "\n", "|bbaa", -1)
@@ -397,6 +380,10 @@ func (p2pNode *P2PNode) readData(rw *bufio.ReadWriter, s net.Stream) {
 						} else {
 							fmt.Println("super node registed with peer id = ", nodeHeader.PeerId)
 						}
+						if p2pNode.Header.Mode != "s" {
+							p2pNode.sendNodeInfo(rw, s)
+						}
+						
 					default:
 						fmt.Println("no method ", p2pMessage.Path)
 					}
@@ -410,6 +397,9 @@ func (p2pNode *P2PNode) readData(rw *bufio.ReadWriter, s net.Stream) {
 	}
 }
 
+func (p2pNode *P2PNode) sendNodeInfo(rw *bufio.ReadWriter, s net.Stream) {
+
+}
 func (p2pNode *P2PNode) writeData(rw *bufio.ReadWriter, s net.Stream) {
 	stdReader := bufio.NewReader(os.Stdin)
 
@@ -430,16 +420,7 @@ func (p2pNode *P2PNode) writeData(rw *bufio.ReadWriter, s net.Stream) {
 			break
 		}
 
-		p2pMsg := &types.P2PMessage{
-			Id:        "",
-			Path:      types.MSG,
-			Data:      []byte(sendData),
-			Timestamp: uint64(time.Now().UnixNano()),
-			Sender:    p2pNode.BasicHost.ID().String(),
-		}
-
-		p2pMsg.Id = util.CalculateHash(strconv.FormatUint(p2pMsg.Timestamp, 10), strconv.FormatInt(int64(p2pMsg.Path), 10), string(p2pMsg.Data))
-		bytes, _ := proto.Marshal(p2pMsg)
+		bytes := util.MakeMsgBytes(types.MSG, []byte(sendData), p2pNode.BasicHost.ID().String())
 
 		str := string(bytes)
 		str = strings.Replace(str, "\n", "|bbaa", -1)

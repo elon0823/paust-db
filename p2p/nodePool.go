@@ -27,7 +27,6 @@ func (nodePool *NodePool) Update(peerId string) {
 }
 
 func (nodePool *NodePool) printAll() {
-	fmt.Println("print node pool")
 	for _, element := range nodePool.NodePulses {
 		fmt.Println(element)
 	}

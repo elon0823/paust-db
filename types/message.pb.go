@@ -18,6 +18,8 @@ const (
 	QUERY_SOURCE_META
 	GET_SOURCE_META_LIST
 	HEARTBEAT
+	NODE_INFO
+	
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
