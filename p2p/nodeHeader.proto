@@ -2,10 +2,11 @@ syntax = "proto3";
 package p2p;
 
 message NodeHeader {
-    string address = 1;
+    string host = 1;
     string port = 2;
     bool secio = 3;
     int64 randseed = 4;
     string mode = 5;
     string peerId = 6;
+    string fullAddr = 7;
 }

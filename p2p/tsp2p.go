@@ -10,7 +10,6 @@ import (
 	mrand "math/rand"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 	"github.com/elon0823/paust-db/types"
 	"github.com/elon0823/paust-db/util"
@@ -40,13 +39,18 @@ type P2PNode struct {
 func NewP2PNode(address string, listenPort string, secio bool, randseed int64, mode string) (*P2PNode, error) {
 
 	host, _ := makeBasicHost(address, listenPort, secio, randseed)
+	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ipfs/%s", host.ID().Pretty()))
+	addr := host.Addrs()[0]
+	fullAddr := addr.Encapsulate(hostAddr)
+
 	header := NodeHeader {
-		Address:        address,
+		Host:        	address,
 		Port:           listenPort,
 		Secio:          secio,
 		Randseed:       randseed,
 		Mode:			mode,
 		PeerId:			host.ID().String(),
+		FullAddr:		fullAddr.String(),
 	}
 	return &P2PNode{
 		Header:        header,
@@ -110,8 +114,14 @@ func (p2pNode *P2PNode) Run(target string) {
 		p2pNode.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pNode.handleStream)
 		// go p2pManager.writeData()
 
+		if p2pNode.Header.Mode == "s" { //super node 
+			p2pNode.publishSuperNode()
+		} else if p2pNode.Header.Mode == "n" {//normal node
+			p2pNode.publishNode()
+		}
+
 		select {} // hang forever
-		/**** This is where the listener code ends ****/
+
 	} else {
 		p2pNode.BasicHost.SetStreamHandler("/p2p/1.0.0", p2pNode.handleStream)
 
@@ -229,8 +239,7 @@ func (p2pNode *P2PNode) propagateMsg(str string, s net.Stream) {
 		}
 	}
 }
-
-func (p2pNode *P2PNode) publishSuperNode() {
+func (p2pNode *P2PNode) publishNode() {
 
 	s, err := p2pNode.connectToBootstrap()
 
@@ -241,12 +250,9 @@ func (p2pNode *P2PNode) publishSuperNode() {
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
 	headerBytes, _ := proto.Marshal(&p2pNode.Header)
-	bytes := util.MakeMsgBytes(types.PUB_SUPERNODE, headerBytes, p2pNode.BasicHost.ID().String()) 
+	bytes := util.MakeMsgBytes(types.PUB_NODE, headerBytes, p2pNode.BasicHost.ID().String()) 
 
-	str := string(bytes)
-	str = strings.Replace(str, "\n", "|bbaa", -1)
-
-	_, err = rw.WriteString(fmt.Sprintf("%s\n", str))
+	_, err = rw.WriteString(util.EncapsuleSendMsg(string(bytes)))
 	if err != nil {
 		fmt.Println("Error writing to buffer")
 		panic(err)
@@ -261,7 +267,44 @@ func (p2pNode *P2PNode) publishSuperNode() {
 	rw = nil
 	s.Close()
 
-	p2pNode.sendMsgToAll(fmt.Sprintf("%s\n", str))
+	//heartbeat to bootstrap
+	ticker := time.NewTicker(time.Second * 300)
+	go func() {
+		for range ticker.C {
+			p2pNode.startHeartbeatToBootstrap()
+		}
+	}()
+}
+
+func (p2pNode *P2PNode) publishSuperNode() {
+
+	s, err := p2pNode.connectToBootstrap()
+
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+
+	headerBytes, _ := proto.Marshal(&p2pNode.Header)
+	bytes := util.MakeMsgBytes(types.PUB_SUPERNODE, headerBytes, p2pNode.BasicHost.ID().String()) 
+	str := util.EncapsuleSendMsg(string(bytes))
+	_, err = rw.WriteString(str)
+	if err != nil {
+		fmt.Println("Error writing to buffer")
+		panic(err)
+	}
+	err = rw.Flush()
+	if err != nil {
+		fmt.Println("Error flushing buffer")
+		panic(err)
+	}
+
+	log.Println("disconnect from bootstrap")
+	rw = nil
+	s.Close()
+
+	p2pNode.sendMsgToAll(str)
 
 	//heartbeat to bootstrap
 	ticker := time.NewTicker(time.Second * 10)
@@ -286,10 +329,7 @@ func (p2pNode *P2PNode) startHeartbeatToBootstrap() {
 
 	bytes := util.MakeMsgBytes(types.HEARTBEAT, headerBytes, p2pNode.BasicHost.ID().String())
 
-	str := string(bytes)
-	str = strings.Replace(str, "\n", "|bbaa", -1)
-
-	_, err = rw.WriteString(fmt.Sprintf("%s\n", str))
+	_, err = rw.WriteString(util.EncapsuleSendMsg(string(bytes)))
 	if err != nil {
 		fmt.Println("Error writing to buffer")
 		panic(err)
@@ -300,6 +340,7 @@ func (p2pNode *P2PNode) startHeartbeatToBootstrap() {
 		panic(err)
 	}
 
+	log.Println("heartbeat to bootstrap")
 	log.Println("disconnect from bootstrap")
 	rw = nil
 	s.Close()
@@ -356,11 +397,9 @@ func (p2pNode *P2PNode) readData(rw *bufio.ReadWriter, s net.Stream) {
 			// Reset console colour: 	\x1b[0m
 			log.Println("received from peer ", s.Conn().RemotePeer().String())
 
-			str := strings.Replace(receivedStr, "\n", "", -1)
-			str = strings.Replace(str, "|bbaa", "\n", -1)
+			p2pMessage, err := util.DecapsuleReceiveMsg(receivedStr)
 
-			p2pMessage := &types.P2PMessage{}
-			if err := proto.Unmarshal([]byte(str), p2pMessage); err != nil {
+			if err != nil {
 				log.Fatal(err)
 			} else {
 				log.Println("original sender peer ", p2pMessage.Sender)
@@ -380,9 +419,6 @@ func (p2pNode *P2PNode) readData(rw *bufio.ReadWriter, s net.Stream) {
 						} else {
 							fmt.Println("super node registed with peer id = ", nodeHeader.PeerId)
 						}
-						if p2pNode.Header.Mode != "s" {
-							p2pNode.sendNodeInfo(rw, s)
-						}
 						
 					default:
 						fmt.Println("no method ", p2pMessage.Path)
@@ -397,9 +433,6 @@ func (p2pNode *P2PNode) readData(rw *bufio.ReadWriter, s net.Stream) {
 	}
 }
 
-func (p2pNode *P2PNode) sendNodeInfo(rw *bufio.ReadWriter, s net.Stream) {
-
-}
 func (p2pNode *P2PNode) writeData(rw *bufio.ReadWriter, s net.Stream) {
 	stdReader := bufio.NewReader(os.Stdin)
 
@@ -422,10 +455,7 @@ func (p2pNode *P2PNode) writeData(rw *bufio.ReadWriter, s net.Stream) {
 
 		bytes := util.MakeMsgBytes(types.MSG, []byte(sendData), p2pNode.BasicHost.ID().String())
 
-		str := string(bytes)
-		str = strings.Replace(str, "\n", "|bbaa", -1)
-
-		p2pNode.sendMsgToAll(fmt.Sprintf("%s\n", str))
+		p2pNode.sendMsgToAll(util.EncapsuleSendMsg(string(bytes)))
 
 		// _, err = rw.WriteString(fmt.Sprintf("%s\n", str))
 		// if err != nil {

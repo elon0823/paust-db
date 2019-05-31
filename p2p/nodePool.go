@@ -33,13 +33,15 @@ func (nodePool *NodePool) printAll() {
 }
 
 func (nodePool *NodePool) CheckTimeout() {
-	nodePool.printAll()
+	
 	for index, element := range nodePool.NodePulses {
 		if (time.Now().Unix() - element.LastTimestamp) > nodePool.TimeoutSec {
 			fmt.Println("remove node ",nodePool.NodePulses[index].NodeHeader.PeerId)
 			nodePool.NodePulses = append(nodePool.NodePulses[:index], nodePool.NodePulses[index+1:]...)
 			nodePool.CheckTimeout()
-			break
+			return
 		}
 	}
+	fmt.Println("------------------------Check timeout completed..")
+	nodePool.printAll()
 }

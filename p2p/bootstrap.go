@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"time"
-	"strings"
+	"github.com/elon0823/paust-db/util"
 	"github.com/elon0823/paust-db/types"
 	"github.com/golang/protobuf/proto"
 	host "github.com/libp2p/go-libp2p-host"
@@ -18,7 +18,7 @@ type BootstrapNode struct {
 	BasicHost host.Host
 	Secio     bool
 	Randseed  int64
-	SuperNodePool NodePool
+	NodePool NodePool
 }
 
 func NewBootstrapNode(address string, listenPort string, secio bool, randseed int64) (*BootstrapNode, error) {
@@ -31,8 +31,8 @@ func NewBootstrapNode(address string, listenPort string, secio bool, randseed in
 		BasicHost: host,
 		Secio:     secio,
 		Randseed:  randseed,
-		SuperNodePool:   NodePool{
-			TimeoutSec: 60,
+		NodePool:   NodePool{
+			TimeoutSec: 600,
 		},
 	}, nil
 }
@@ -45,10 +45,10 @@ func (bootstrapNode *BootstrapNode) Run() {
 	bootstrapNode.BasicHost.SetStreamHandler("/p2p/bootstrap/1.0.0", bootstrapNode.handleStream)
 	// go p2pManager.writeData()
 	
-	ticker := time.NewTicker(time.Second * 5)
+	ticker := time.NewTicker(time.Second * 10)
 	go func() {
 		for range ticker.C {
-			bootstrapNode.SuperNodePool.CheckTimeout()
+			bootstrapNode.NodePool.CheckTimeout()
 		}
 	}()
 
@@ -76,7 +76,7 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 			s.Close()
 			break
 		}
-
+		
 		if receivedStr == "" {
 			return
 		}
@@ -85,11 +85,9 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 			// Reset console colour: 	\x1b[0m
 			log.Println("received from peer ", s.Conn().RemotePeer().String())
 
-			str := strings.Replace(receivedStr, "\n", "", -1)
-			str = strings.Replace(str, "|bbaa", "\n", -1)
+			p2pMessage, err := util.DecapsuleReceiveMsg(receivedStr)
 
-			p2pMessage := &types.P2PMessage{}
-			if err := proto.Unmarshal([]byte(str), p2pMessage); err != nil {
+			if err != nil {
 				log.Fatal(err)
 			} else {
 				log.Println("original sender peer ", p2pMessage.Sender)
@@ -97,7 +95,7 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 				switch p2pMessage.Path {
 				case types.MSG:
 					fmt.Println(string(p2pMessage.Data))
-				case types.PUB_SUPERNODE:
+				case types.PUB_SUPERNODE, types.PUB_NODE:
 					nodeHeader := &NodeHeader{}
 					if err := proto.Unmarshal([]byte(p2pMessage.Data), nodeHeader); err != nil {
 						log.Fatal(err)
@@ -106,15 +104,15 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 							NodeHeader: *nodeHeader,
 							LastTimestamp: time.Now().Unix(),
 						}
-						bootstrapNode.SuperNodePool.AddNodePulse(*nodePulse)
-						fmt.Println("super node registed with peer id = ", nodeHeader.PeerId)
+						bootstrapNode.NodePool.AddNodePulse(*nodePulse)
+						fmt.Println("node registed with peer id = ", nodeHeader.PeerId)
 					}
 				case types.HEARTBEAT:
 					nodeHeader := &NodeHeader{}
 					if err := proto.Unmarshal([]byte(p2pMessage.Data), nodeHeader); err != nil {
 						log.Fatal(err)
 					} else {
-						bootstrapNode.SuperNodePool.Update(nodeHeader.PeerId)
+						bootstrapNode.NodePool.Update(nodeHeader.PeerId)
 						fmt.Println("heartbeat with peer id = ", nodeHeader.PeerId)
 					}
 				default:

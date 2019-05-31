@@ -14,7 +14,7 @@ func main() {
 	secio := flag.Bool("secio", false, "enable secio")
 	//dbpath := flag.String("dpath", ".pdb", "database path to store")
 	seed := flag.Int64("seed", 0, "set random seed for id generation")
-	mode := flag.String("m", "", "node mode. (b), (s), (n)")
+	mode := flag.String("m", "n", "node mode. (b), (s), (n)")
 	//store := flag.Bool("savedb", false, "save db")
 
 	flag.Parse()
