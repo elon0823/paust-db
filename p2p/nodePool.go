@@ -16,10 +16,11 @@ func (nodePool *NodePool) AddNodePulse(nodePulse NodePulse) {
 	nodePool.NodePulses = append(nodePool.NodePulses, nodePulse)
 }
 
-func (nodePool *NodePool) Update(peerId string) {
+func (nodePool *NodePool) Update(nodeHeader NodeHeader) {
 	
 	for index, element := range nodePool.NodePulses {
-		if element.NodeHeader.PeerId == peerId {
+		if element.NodeHeader.PeerId == nodeHeader.PeerId {
+			nodePool.NodePulses[index].NodeHeader = nodeHeader
 			nodePool.NodePulses[index].LastTimestamp = time.Now().Unix()
 			break
 		}

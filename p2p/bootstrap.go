@@ -76,7 +76,7 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 			s.Close()
 			break
 		}
-		
+
 		if receivedStr == "" {
 			return
 		}
@@ -112,7 +112,7 @@ func (bootstrapNode *BootstrapNode) readData(rw *bufio.ReadWriter, s net.Stream)
 					if err := proto.Unmarshal([]byte(p2pMessage.Data), nodeHeader); err != nil {
 						log.Fatal(err)
 					} else {
-						bootstrapNode.NodePool.Update(nodeHeader.PeerId)
+						bootstrapNode.NodePool.Update(*nodeHeader)
 						fmt.Println("heartbeat with peer id = ", nodeHeader.PeerId)
 					}
 				default:
